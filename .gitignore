@@ -1,0 +1,4 @@
+**/*.egg-info
+buffham/tests/*.hpp
+**/__pycache__
+**/.vscode
