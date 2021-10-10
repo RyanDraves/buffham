@@ -12,11 +12,16 @@ class Types(enum.Enum):
 
 class Languages(enum.Enum):
     Cxx = '.hpp'
+    C = '.h'
     Python = '.py'
 
 
 LANGUAGE_TYPES = {
     Languages.Cxx: {
+        Types.UINT16: 'uint16_t',
+        Types.UINT64: 'uint64_t',
+    },
+    Languages.C: {
         Types.UINT16: 'uint16_t',
         Types.UINT64: 'uint64_t',
     },
@@ -124,6 +129,8 @@ class Generator:
 
             if language == Languages.Cxx:
                 Generator._generate_cxx(in_file, out_file, messages)
+            elif language == Languages.C:
+                Generator._generate_c(in_file, out_file, messages)
             elif language == Languages.Python:
                 Generator._generate_python(in_file, out_file, messages)
 
@@ -142,9 +149,9 @@ class Generator:
             for attr_name, attr_type in message.attributes.items():
                 constructor_definition += f'{attr_name}: {type_map[attr_type]}, '
                 constructor_implemenation += f'{Generator.TAB * 2}self.{attr_name} = {attr_name}\n'
-            constructor_definition = constructor_definition[:-2] + ')'
+            constructor_definition = constructor_definition[:-2] + '):\n'
             constructor_implemenation = constructor_implemenation
-            constructor = constructor_definition + ':\n' + constructor_implemenation + f'{Generator.TAB}\n'
+            constructor = constructor_definition + constructor_implemenation
 
             buffer_size = (f'{Generator.TAB}def buffer_size(self) -> int:\n'
                            f'{Generator.TAB*2}return {message.static_size()}\n')
@@ -176,8 +183,6 @@ class Generator:
                 f'{decode}'
                 f'\n'
                 )
-
-
 
         header = textwrap.dedent(f"""\
             \"\"\"
@@ -221,10 +226,10 @@ class Generator:
             encode_memcpy = ''
             buf_idx = 0
             for attr_name, attr_type in message.attributes.items():
-                encode_memcpy += f'{Generator.TAB*2}memcpy(buffer + {buf_idx}, &{attr_name}, {attr_type.value});\n'
+                encode_memcpy += f'{Generator.TAB*2}memcpy(buffer.get() + {buf_idx}, &{attr_name}, {attr_type.value});\n'
                 buf_idx += attr_type.value
-            encode = (f'{Generator.TAB}uint8_t* encode() {{\n'
-                      f'{Generator.TAB*2}uint8_t* buffer = new uint8_t({message.static_size()});\n'
+            encode = (f'{Generator.TAB}std::unique_ptr<uint8_t> encode() {{\n'
+                      f'{Generator.TAB*2}std::unique_ptr<uint8_t> buffer(new uint8_t({message.static_size()}));\n'
                       f'{encode_memcpy}'
                       f'{Generator.TAB*2}return buffer;\n'
                       f'{Generator.TAB}}}\n')
@@ -232,10 +237,10 @@ class Generator:
             decode_initializer = '{ '
             buf_idx = 0
             for attr_name, attr_type in message.attributes.items():
-                decode_initializer += f'*({type_map[attr_type]}*)(buffer + {buf_idx}), '
+                decode_initializer += f'*({type_map[attr_type]}*)(buffer.get() + {buf_idx}), '
                 buf_idx += attr_type.value
             decode_initializer = decode_initializer[:-2] + ' }'
-            decode = (f'{Generator.TAB}static {message.name} decode(uint8_t* buffer, size_t len) {{\n'
+            decode = (f'{Generator.TAB}static {message.name} decode(const std::unique_ptr<uint8_t>& buffer, size_t len) {{\n'
                       f'{Generator.TAB*2}return {decode_initializer};\n'
                       f'{Generator.TAB}}}\n')
 
@@ -257,7 +262,82 @@ class Generator:
              * Buffham generated from {in_file.name}
              */
             #include <stdint.h>
-            #include <cstring>
+            #include <string.h>
+            #include <memory>
+        
+        
+            """)
+
+        with open(out_file, 'w') as fp:
+            fp.write(header)
+            for definition in definitions:
+                fp.write(definition)
+
+    @staticmethod
+    def _generate_c(in_file: pathlib.Path, out_file: pathlib.Path, messages: List[Message]):
+        definitions = []
+        type_map = LANGUAGE_TYPES[Languages.Cxx]
+        for message in messages:
+            attribute_definitions = ''
+            for attr_name, attr_type in message.attributes.items():
+                attribute_definitions += f'{Generator.TAB}{type_map[attr_type]} {attr_name};\n'
+            attribute_definitions = attribute_definitions
+
+            # constructor_definition = f'{Generator.TAB}{message.name}('
+            # constructor_implemenation = ''
+            # for attr_name, attr_type in message.attributes.items():
+            #     constructor_definition += f'{type_map[attr_type]} {attr_name}, '
+            #     constructor_implemenation += f'{Generator.TAB * 2}this->{attr_name} = {attr_name};\n'
+            # constructor_definition = constructor_definition[:-2] + ')'
+            # constructor_implemenation = constructor_implemenation
+            # constructor = constructor_definition + ' {\n' + constructor_implemenation + f'{Generator.TAB}}}\n'
+
+            buffer_size = (f'size_t {message.name}_buffer_size({message.name}* inst) {{\n'
+                           f'{Generator.TAB}return {message.static_size()};\n'
+                           f'}}\n\n')
+
+            encode_memcpy = ''
+            buf_idx = 0
+            for attr_name, attr_type in message.attributes.items():
+                encode_memcpy += f'{Generator.TAB}memcpy(buffer + {buf_idx}, &inst->{attr_name}, {attr_type.value});\n'
+                buf_idx += attr_type.value
+            encode = (f'uint8_t* {message.name}_encode({message.name}* inst) {{\n'
+                      f'{Generator.TAB}uint8_t* buffer = (uint8_t*)malloc({message.static_size()});\n'
+                      f'{encode_memcpy}'
+                      f'{Generator.TAB}return buffer;\n'
+                      f'}}\n\n')
+
+            decode_initializer = '{ '
+            buf_idx = 0
+            for attr_name, attr_type in message.attributes.items():
+                decode_initializer += f'*({type_map[attr_type]}*)(buffer + {buf_idx}), '
+                buf_idx += attr_type.value
+            decode_initializer = decode_initializer[:-2] + ' }'
+            decode = (f'{message.name} {message.name}_decode(uint8_t* buffer, size_t len) {{\n'
+                      f'{Generator.TAB}RawImuData msg = {decode_initializer};\n'
+                      f'{Generator.TAB}return msg;\n'
+                      f'}}\n\n')
+
+            definitions.append(
+                f'typedef struct {{\n'
+                f'{attribute_definitions}'
+                f'}} {message.name};\n\n'
+                # f'{constructor}\n'
+                f'{buffer_size}'
+                f'{encode}'
+                f'{decode}'
+                )
+
+
+
+        header = textwrap.dedent(f"""\
+            /*
+             * AUTOGENERATED CODE. DO NOT EDIT.
+             * Buffham generated from {in_file.name}
+             */
+            #include <stdint.h>
+            #include <stdlib.h>
+            #include <string.h>
         
         
             """)

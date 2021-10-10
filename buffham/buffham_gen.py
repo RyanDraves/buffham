@@ -13,7 +13,7 @@ def main(dir: pathlib.Path):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Generate BuffHam definitions')
-    parser.add_argument('--dir', '-d', help='Directory to recursively generate through', default=str(pathlib.Path.cwd()))
+    parser.add_argument('dir', help='Directory to recursively generate through', default=str(pathlib.Path.cwd()))
     
     args = parser.parse_args()
 
