@@ -8,3 +8,8 @@ decoded_msg = RawImuData.decode(buffer)
 
 print(msg.accel_x, msg.accel_y, msg.accel_z, msg.timestamp)
 print(decoded_msg.accel_x, decoded_msg.accel_y, decoded_msg.accel_z, decoded_msg.timestamp)
+
+assert msg.accel_x == decoded_msg.accel_x
+assert msg.accel_y == decoded_msg.accel_y
+assert msg.accel_z == decoded_msg.accel_z
+assert msg.timestamp == decoded_msg.timestamp

@@ -2,8 +2,7 @@ import pathlib
 import textwrap
 import enum
 import re
-import collections as c
-from typing import List, Optional, OrderedDict, Tuple
+from typing import List, Optional, Tuple
 
 class Types(enum.Enum):
     UINT16 = 2
@@ -39,13 +38,29 @@ PY_STRUCT_MAP = {
 
 
 class Message:
-    def __init__(self, name: str, attributes: OrderedDict[str, Types]):
+    def __init__(self, name: str, attributes: List[Tuple[str, Types]], id: int):
         self.name = name
         self.attributes = attributes
+        self.id = id
 
-    def static_size(self) -> int:
+        assert self.payload_size() < 0xFFFF
+
+    def header(self) -> bytes:
+        return b'Bh' + self.id.to_bytes(1, 'big') + self.payload_size().to_bytes(2, 'big')
+
+    def header_hex(self) -> str:
+        return '%#08x' % int.from_bytes(self.header(), 'big')
+
+    def total_size(self) -> int:
+        return self.header_size() + self.payload_size()
+
+    def header_size(self) -> int:
+        # 'Bh' | message_id | payload_size
+        return 5
+
+    def payload_size(self) -> int:
         size = 0
-        for attr_type in self.attributes.values():
+        for _, attr_type in self.attributes:
             size += attr_type.value
         return size
 
@@ -54,6 +69,8 @@ class Parser:
     MESSAGE_RE = re.compile(r'^message (.*):$')
     ATTRIBUTE_RE = re.compile(f'^[\ |\t]*((?:{"|".join([_type.name.lower() for _type in Types])}))\ *(.*)$')
     COMMENT_RE = re.compile(r'^[\ |\t]*#.*$')
+
+    message_id = 0
 
     @staticmethod
     def parse_file(file: pathlib.Path) -> List[Message]:
@@ -86,11 +103,11 @@ class Parser:
 
     @staticmethod
     def _parse_message(data: List[str], idx: int, name: str, messages: List[Message]) -> int:
-        attributes: OrderedDict[str, Types] = c.OrderedDict()
+        attributes: List[Tuple[str, Types]] = []
         while idx < len(data):
             attribute = Parser._match_attribute(data[idx])
             if attribute:
-                attributes[attribute[0]] = attribute[1]
+                attributes.append(attribute)
             elif Parser._is_comment(data[idx]):
                 pass
             elif len(data[idx]):
@@ -100,7 +117,8 @@ class Parser:
                 break
             idx += 1
         if len(attributes):
-            messages.append(Message(name, attributes))
+            messages.append(Message(name, attributes, Parser.message_id))
+            Parser.message_id += 1
         else:
             raise ValueError(f'Expected {name} to have attributes')
         return idx - 1  # Back up so top-level parsing can increment
@@ -140,13 +158,13 @@ class Generator:
         type_map = LANGUAGE_TYPES[Languages.Python]
         for message in messages:
             attribute_definitions = ''
-            for attr_name, attr_type in message.attributes.items():
+            for attr_name, attr_type in message.attributes:
                 attribute_definitions += f'{Generator.TAB}{attr_name}: {type_map[attr_type]}\n'
             attribute_definitions = attribute_definitions
 
             constructor_definition = f'{Generator.TAB}def __init__(self, '
             constructor_implemenation = ''
-            for attr_name, attr_type in message.attributes.items():
+            for attr_name, attr_type in message.attributes:
                 constructor_definition += f'{attr_name}: {type_map[attr_type]}, '
                 constructor_implemenation += f'{Generator.TAB * 2}self.{attr_name} = {attr_name}\n'
             constructor_definition = constructor_definition[:-2] + '):\n'
@@ -154,24 +172,27 @@ class Generator:
             constructor = constructor_definition + constructor_implemenation
 
             buffer_size = (f'{Generator.TAB}def buffer_size(self) -> int:\n'
-                           f'{Generator.TAB*2}return {message.static_size()}\n')
+                           f'{Generator.TAB*2}return {message.total_size()}\n')
 
             struct_format_str = '>'
             struct_values = ''
-            for attr_name, attr_type in message.attributes.items():
+            for attr_name, attr_type in message.attributes:
                 struct_format_str += PY_STRUCT_MAP[attr_type]
                 struct_values += f'self.{attr_name}, '
             struct_values = struct_values[:-2]
             encode = (f'{Generator.TAB}def encode(self) -> bytes:\n'
-                      f'{Generator.TAB*2}return struct.pack(\'{struct_format_str}\', {struct_values})\n')
+                      f'{Generator.TAB*2}return {message.header()} + struct.pack(\'{struct_format_str}\', {struct_values})\n')
 
             struct_values = ''
-            for attr_idx, attr in enumerate(message.attributes.items()):
+            for attr_idx, attr in enumerate(message.attributes):
                 attr_name, attr_type = attr
                 struct_values += f'{attr_name}={type_map[attr_type]}(e[{attr_idx}]), '
             struct_values = struct_values[:-2]
             decode = (f'{Generator.TAB}def decode(buffer: bytes) -> \'{message.name}\':\n'
-                      f'{Generator.TAB*2}e = struct.unpack(\'{struct_format_str}\', buffer)\n'
+                      f'{Generator.TAB*2}assert buffer[:2] == b\'Bh\'\n'
+                      f'{Generator.TAB*2}assert int.from_bytes(buffer[2:3], \'big\') == {message.id}\n'
+                      f'{Generator.TAB*2}assert int.from_bytes(buffer[3:5], \'big\') == {message.payload_size()}\n'
+                      f'{Generator.TAB*2}e = struct.unpack(\'{struct_format_str}\', buffer[{message.header_size()}:])\n'
                       f'{Generator.TAB*2}return {message.name}({struct_values})\n')
 
             definitions.append(
@@ -206,13 +227,13 @@ class Generator:
         type_map = LANGUAGE_TYPES[Languages.Cxx]
         for message in messages:
             attribute_definitions = ''
-            for attr_name, attr_type in message.attributes.items():
+            for attr_name, attr_type in message.attributes:
                 attribute_definitions += f'{Generator.TAB}{type_map[attr_type]} {attr_name};\n'
             attribute_definitions = attribute_definitions
 
             # constructor_definition = f'{Generator.TAB}{message.name}('
             # constructor_implemenation = ''
-            # for attr_name, attr_type in message.attributes.items():
+            # for attr_name, attr_type in message.attributes:
             #     constructor_definition += f'{type_map[attr_type]} {attr_name}, '
             #     constructor_implemenation += f'{Generator.TAB * 2}this->{attr_name} = {attr_name};\n'
             # constructor_definition = constructor_definition[:-2] + ')'
@@ -220,27 +241,32 @@ class Generator:
             # constructor = constructor_definition + ' {\n' + constructor_implemenation + f'{Generator.TAB}}}\n'
 
             buffer_size = (f'{Generator.TAB}size_t buffer_size() {{\n'
-                           f'{Generator.TAB*2}return {message.static_size()};\n'
+                           f'{Generator.TAB*2}return {message.total_size()};\n'
                            f'{Generator.TAB}}}\n')
 
-            encode_memcpy = ''
-            buf_idx = 0
-            for attr_name, attr_type in message.attributes.items():
+            encode_memcpy = (f'{Generator.TAB*2}size_t header = {message.header_hex()};\n'
+                             f'{Generator.TAB*2}memcpy(buffer.get(), &header, {message.header_size()});\n')
+            buf_idx = message.header_size()
+            for attr_name, attr_type in message.attributes:
                 encode_memcpy += f'{Generator.TAB*2}memcpy(buffer.get() + {buf_idx}, &{attr_name}, {attr_type.value});\n'
                 buf_idx += attr_type.value
             encode = (f'{Generator.TAB}std::unique_ptr<uint8_t> encode() {{\n'
-                      f'{Generator.TAB*2}std::unique_ptr<uint8_t> buffer(new uint8_t({message.static_size()}));\n'
+                      f'{Generator.TAB*2}std::unique_ptr<uint8_t> buffer(new uint8_t({message.total_size()}));\n'
                       f'{encode_memcpy}'
                       f'{Generator.TAB*2}return buffer;\n'
                       f'{Generator.TAB}}}\n')
 
             decode_initializer = '{ '
-            buf_idx = 0
-            for attr_name, attr_type in message.attributes.items():
+            buf_idx = message.header_size()
+            for attr_name, attr_type in message.attributes:
                 decode_initializer += f'*({type_map[attr_type]}*)(buffer.get() + {buf_idx}), '
                 buf_idx += attr_type.value
             decode_initializer = decode_initializer[:-2] + ' }'
             decode = (f'{Generator.TAB}static {message.name} decode(const std::unique_ptr<uint8_t>& buffer, size_t len) {{\n'
+                      f'{Generator.TAB*2}assert(*(buffer.get() + 0) == \'B\');\n'
+                      f'{Generator.TAB*2}assert(*(buffer.get() + 1) == \'h\');\n'
+                      f'{Generator.TAB*2}assert(*(buffer.get() + 2) == {message.id});\n'
+                      f'{Generator.TAB*2}assert(*(uint16_t*)(buffer.get() + 3) == {message.payload_size()});\n'
                       f'{Generator.TAB*2}return {decode_initializer};\n'
                       f'{Generator.TAB}}}\n')
 
@@ -261,9 +287,10 @@ class Generator:
              * AUTOGENERATED CODE. DO NOT EDIT.
              * Buffham generated from {in_file.name}
              */
+            #include <cassert>
+            #include <memory>
             #include <stdint.h>
             #include <string.h>
-            #include <memory>
         
         
             """)
@@ -279,13 +306,13 @@ class Generator:
         type_map = LANGUAGE_TYPES[Languages.Cxx]
         for message in messages:
             attribute_definitions = ''
-            for attr_name, attr_type in message.attributes.items():
+            for attr_name, attr_type in message.attributes:
                 attribute_definitions += f'{Generator.TAB}{type_map[attr_type]} {attr_name};\n'
             attribute_definitions = attribute_definitions
 
             # constructor_definition = f'{Generator.TAB}{message.name}('
             # constructor_implemenation = ''
-            # for attr_name, attr_type in message.attributes.items():
+            # for attr_name, attr_type in message.attributes:
             #     constructor_definition += f'{type_map[attr_type]} {attr_name}, '
             #     constructor_implemenation += f'{Generator.TAB * 2}this->{attr_name} = {attr_name};\n'
             # constructor_definition = constructor_definition[:-2] + ')'
@@ -293,23 +320,24 @@ class Generator:
             # constructor = constructor_definition + ' {\n' + constructor_implemenation + f'{Generator.TAB}}}\n'
 
             buffer_size = (f'size_t {message.name}_buffer_size({message.name}* inst) {{\n'
-                           f'{Generator.TAB}return {message.static_size()};\n'
+                           f'{Generator.TAB}return {message.total_size()};\n'
                            f'}}\n\n')
 
-            encode_memcpy = ''
-            buf_idx = 0
-            for attr_name, attr_type in message.attributes.items():
+            encode_memcpy = (f'{Generator.TAB*2}size_t header = {message.header_hex()};\n'
+                             f'{Generator.TAB*2}memcpy(buffer, &header, {message.header_size()});\n')
+            buf_idx = message.header_size()
+            for attr_name, attr_type in message.attributes:
                 encode_memcpy += f'{Generator.TAB}memcpy(buffer + {buf_idx}, &inst->{attr_name}, {attr_type.value});\n'
                 buf_idx += attr_type.value
             encode = (f'uint8_t* {message.name}_encode({message.name}* inst) {{\n'
-                      f'{Generator.TAB}uint8_t* buffer = (uint8_t*)malloc({message.static_size()});\n'
+                      f'{Generator.TAB}uint8_t* buffer = (uint8_t*)malloc({message.total_size()});\n'
                       f'{encode_memcpy}'
                       f'{Generator.TAB}return buffer;\n'
                       f'}}\n\n')
 
             decode_initializer = '{ '
-            buf_idx = 0
-            for attr_name, attr_type in message.attributes.items():
+            buf_idx = message.header_size()
+            for attr_name, attr_type in message.attributes:
                 decode_initializer += f'*({type_map[attr_type]}*)(buffer + {buf_idx}), '
                 buf_idx += attr_type.value
             decode_initializer = decode_initializer[:-2] + ' }'
