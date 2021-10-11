@@ -46,10 +46,10 @@ class Message:
         assert self.payload_size() < 0xFFFF
 
     def header(self) -> bytes:
-        return b'Bh' + self.id.to_bytes(1, 'big') + self.payload_size().to_bytes(2, 'big')
+        return b'Bh' + self.id.to_bytes(1, 'little') + self.payload_size().to_bytes(2, 'little')
 
-    def header_hex(self) -> str:
-        return '%#08x' % int.from_bytes(self.header(), 'big')
+    def header_hex_array(self) -> List[str]:
+        return re.findall('..', '%08x' % int.from_bytes(self.header(), 'big'))
 
     def total_size(self) -> int:
         return self.header_size() + self.payload_size()
@@ -190,8 +190,8 @@ class Generator:
             struct_values = struct_values[:-2]
             decode = (f'{Generator.TAB}def decode(buffer: bytes) -> \'{message.name}\':\n'
                       f'{Generator.TAB*2}assert buffer[:2] == b\'Bh\'\n'
-                      f'{Generator.TAB*2}assert int.from_bytes(buffer[2:3], \'big\') == {message.id}\n'
-                      f'{Generator.TAB*2}assert int.from_bytes(buffer[3:5], \'big\') == {message.payload_size()}\n'
+                      f'{Generator.TAB*2}assert int.from_bytes(buffer[2:3], \'little\') == {message.id}\n'
+                      f'{Generator.TAB*2}assert int.from_bytes(buffer[3:5], \'little\') == {message.payload_size()}\n'
                       f'{Generator.TAB*2}e = struct.unpack(\'{struct_format_str}\', buffer[{message.header_size()}:])\n'
                       f'{Generator.TAB*2}return {message.name}({struct_values})\n')
 
@@ -244,29 +244,33 @@ class Generator:
                            f'{Generator.TAB*2}return {message.total_size()};\n'
                            f'{Generator.TAB}}}\n')
 
-            encode_memcpy = (f'{Generator.TAB*2}size_t header = {message.header_hex()};\n'
-                             f'{Generator.TAB*2}memcpy(buffer.get(), &header, {message.header_size()});\n')
+            full_header_hex = message.header_hex_array()
+            header_array = ', '.join(['0x' + val for val in full_header_hex])
+            encode_memcpy = (f'{Generator.TAB*2}uint8_t _bh_header[{message.header_size()}] = {{{header_array}}};\n'
+                             f'{Generator.TAB*2}memcpy(_ptr, &_bh_header, 5);\n')
             buf_idx = message.header_size()
             for attr_name, attr_type in message.attributes:
-                encode_memcpy += f'{Generator.TAB*2}memcpy(buffer.get() + {buf_idx}, &{attr_name}, {attr_type.value});\n'
+                encode_memcpy += f'{Generator.TAB*2}memcpy(_ptr + {buf_idx}, &{attr_name}, {attr_type.value});\n'
                 buf_idx += attr_type.value
             encode = (f'{Generator.TAB}std::unique_ptr<uint8_t> encode() {{\n'
-                      f'{Generator.TAB*2}std::unique_ptr<uint8_t> buffer(new uint8_t({message.total_size()}));\n'
+                      f'{Generator.TAB*2}std::unique_ptr<uint8_t> _buffer(new uint8_t({message.total_size()}));\n'
+                      f'{Generator.TAB*2}uint8_t* _ptr = _buffer.get();\n'
                       f'{encode_memcpy}'
-                      f'{Generator.TAB*2}return buffer;\n'
+                      f'{Generator.TAB*2}return _buffer;\n'
                       f'{Generator.TAB}}}\n')
 
             decode_initializer = '{ '
             buf_idx = message.header_size()
             for attr_name, attr_type in message.attributes:
-                decode_initializer += f'*({type_map[attr_type]}*)(buffer.get() + {buf_idx}), '
+                decode_initializer += f'*({type_map[attr_type]}*)(_ptr + {buf_idx}), '
                 buf_idx += attr_type.value
             decode_initializer = decode_initializer[:-2] + ' }'
             decode = (f'{Generator.TAB}static {message.name} decode(const std::unique_ptr<uint8_t>& buffer, size_t len) {{\n'
-                      f'{Generator.TAB*2}assert(*(buffer.get() + 0) == \'B\');\n'
-                      f'{Generator.TAB*2}assert(*(buffer.get() + 1) == \'h\');\n'
-                      f'{Generator.TAB*2}assert(*(buffer.get() + 2) == {message.id});\n'
-                      f'{Generator.TAB*2}assert(*(uint16_t*)(buffer.get() + 3) == {message.payload_size()});\n'
+                      f'{Generator.TAB*2}uint8_t* _ptr = buffer.get();\n'
+                      f'{Generator.TAB*2}assert(*(_ptr + 0) == \'B\');\n'
+                      f'{Generator.TAB*2}assert(*(_ptr + 1) == \'h\');\n'
+                      f'{Generator.TAB*2}assert(*(_ptr + 2) == {message.id});\n'
+                      f'{Generator.TAB*2}assert(*(uint16_t*)(_ptr + 3) == {message.payload_size()});\n'
                       f'{Generator.TAB*2}return {decode_initializer};\n'
                       f'{Generator.TAB}}}\n')
 
@@ -323,8 +327,10 @@ class Generator:
                            f'{Generator.TAB}return {message.total_size()};\n'
                            f'}}\n\n')
 
-            encode_memcpy = (f'{Generator.TAB*2}size_t header = {message.header_hex()};\n'
-                             f'{Generator.TAB*2}memcpy(buffer, &header, {message.header_size()});\n')
+            full_header_hex = message.header_hex_array()
+            header_array = ', '.join(['0x' + val for val in full_header_hex])
+            encode_memcpy = (f'{Generator.TAB}uint8_t _bh_header[{message.header_size()}] = {{{header_array}}};\n'
+                             f'{Generator.TAB}memcpy(buffer, &_bh_header, 5);\n')
             buf_idx = message.header_size()
             for attr_name, attr_type in message.attributes:
                 encode_memcpy += f'{Generator.TAB}memcpy(buffer + {buf_idx}, &inst->{attr_name}, {attr_type.value});\n'
