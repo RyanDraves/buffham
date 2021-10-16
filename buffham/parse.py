@@ -174,7 +174,7 @@ class Generator:
             buffer_size = (f'{Generator.TAB}def buffer_size(self) -> int:\n'
                            f'{Generator.TAB*2}return {message.total_size()}\n')
 
-            struct_format_str = '>'
+            struct_format_str = '<'  # Little endian
             struct_values = ''
             for attr_name, attr_type in message.attributes:
                 struct_format_str += PY_STRUCT_MAP[attr_type]
@@ -247,6 +247,7 @@ class Generator:
             full_header_hex = message.header_hex_array()
             header_array = ', '.join(['0x' + val for val in full_header_hex])
             encode_memcpy = (f'{Generator.TAB*2}uint8_t _bh_header[{message.header_size()}] = {{{header_array}}};\n'
+                             # TODO: Don't be dumb with memcpy. Just write out to the pointer
                              f'{Generator.TAB*2}memcpy(_ptr, &_bh_header, 5);\n')
             buf_idx = message.header_size()
             for attr_name, attr_type in message.attributes:
@@ -348,7 +349,7 @@ class Generator:
                 buf_idx += attr_type.value
             decode_initializer = decode_initializer[:-2] + ' }'
             decode = (f'{message.name} {message.name}_decode(uint8_t* buffer, size_t len) {{\n'
-                      f'{Generator.TAB}RawImuData msg = {decode_initializer};\n'
+                      f'{Generator.TAB}{message.name} msg = {decode_initializer};\n'
                       f'{Generator.TAB}return msg;\n'
                       f'}}\n\n')
 
