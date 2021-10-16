@@ -5,6 +5,7 @@ import re
 from typing import List, Optional, Tuple
 
 class Types(enum.Enum):
+    UINT8 = 1
     UINT16 = 2
     UINT64 = 8
 
@@ -17,14 +18,17 @@ class Languages(enum.Enum):
 
 LANGUAGE_TYPES = {
     Languages.Cxx: {
+        Types.UINT8: 'uint8_t',
         Types.UINT16: 'uint16_t',
         Types.UINT64: 'uint64_t',
     },
     Languages.C: {
+        Types.UINT8: 'uint8_t',
         Types.UINT16: 'uint16_t',
         Types.UINT64: 'uint64_t',
     },
     Languages.Python: {
+        Types.UINT8: 'np.uint8',
         Types.UINT16: 'np.uint16',
         Types.UINT64: 'np.uint64',
     }
@@ -32,6 +36,7 @@ LANGUAGE_TYPES = {
 
 # https://docs.python.org/3/library/struct.html#format-characters
 PY_STRUCT_MAP = {
+    Types.UINT8: 'B',
     Types.UINT16: 'H',
     Types.UINT64: 'Q'
 }
