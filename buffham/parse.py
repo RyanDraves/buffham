@@ -5,9 +5,26 @@ import re
 from typing import List, Optional, Tuple
 
 class Types(enum.Enum):
-    UINT8 = 1
-    UINT16 = 2
-    UINT64 = 8
+    UINT8 = enum.auto()
+    UINT16 = enum.auto()
+    UINT32 = enum.auto()
+    UINT64 = enum.auto()
+    INT8 = enum.auto()
+    INT16 = enum.auto()
+    INT32 = enum.auto()
+    INT64 = enum.auto()
+
+
+TYPE_SIZES = {
+    Types.UINT8: 1,
+    Types.UINT16: 2,
+    Types.UINT32: 4,
+    Types.UINT64: 8,
+    Types.INT8: 1,
+    Types.INT16: 2,
+    Types.INT32: 4,
+    Types.INT64: 8,
+}
 
 
 class Languages(enum.Enum):
@@ -20,17 +37,32 @@ LANGUAGE_TYPES = {
     Languages.Cxx: {
         Types.UINT8: 'uint8_t',
         Types.UINT16: 'uint16_t',
+        Types.UINT32: 'uint32_t',
         Types.UINT64: 'uint64_t',
+        Types.INT8: 'int8_t',
+        Types.INT16: 'int16_t',
+        Types.INT32: 'int32_t',
+        Types.INT64: 'int64_t',
     },
     Languages.C: {
         Types.UINT8: 'uint8_t',
         Types.UINT16: 'uint16_t',
+        Types.UINT32: 'uint32_t',
         Types.UINT64: 'uint64_t',
+        Types.INT8: 'int8_t',
+        Types.INT16: 'int16_t',
+        Types.INT32: 'int32_t',
+        Types.INT64: 'int64_t',
     },
     Languages.Python: {
         Types.UINT8: 'np.uint8',
         Types.UINT16: 'np.uint16',
+        Types.UINT32: 'np.uint32',
         Types.UINT64: 'np.uint64',
+        Types.INT8: 'np.int8',
+        Types.INT16: 'np.int16',
+        Types.INT32: 'np.int32',
+        Types.INT64: 'np.int64',
     }
 }
 
@@ -38,7 +70,12 @@ LANGUAGE_TYPES = {
 PY_STRUCT_MAP = {
     Types.UINT8: 'B',
     Types.UINT16: 'H',
-    Types.UINT64: 'Q'
+    Types.UINT32: 'L',
+    Types.UINT64: 'Q',
+    Types.INT8: 'b',
+    Types.INT16: 'h',
+    Types.INT32: 'l',
+    Types.INT64: 'q'
 }
 
 
@@ -66,7 +103,7 @@ class Message:
     def payload_size(self) -> int:
         size = 0
         for _, attr_type in self.attributes:
-            size += attr_type.value
+            size += TYPE_SIZES[attr_type]
         return size
 
 
@@ -256,8 +293,8 @@ class Generator:
                              f'{Generator.TAB*2}memcpy(_ptr, &_bh_header, 5);\n')
             buf_idx = message.header_size()
             for attr_name, attr_type in message.attributes:
-                encode_memcpy += f'{Generator.TAB*2}memcpy(_ptr + {buf_idx}, &{attr_name}, {attr_type.value});\n'
-                buf_idx += attr_type.value
+                encode_memcpy += f'{Generator.TAB*2}memcpy(_ptr + {buf_idx}, &{attr_name}, {TYPE_SIZES[attr_type]});\n'
+                buf_idx += TYPE_SIZES[attr_type]
             encode = (f'{Generator.TAB}std::unique_ptr<uint8_t> encode() {{\n'
                       f'{Generator.TAB*2}std::unique_ptr<uint8_t> _buffer(new uint8_t({message.total_size()}));\n'
                       f'{Generator.TAB*2}uint8_t* _ptr = _buffer.get();\n'
@@ -269,7 +306,7 @@ class Generator:
             buf_idx = message.header_size()
             for attr_name, attr_type in message.attributes:
                 decode_initializer += f'*({type_map[attr_type]}*)(_ptr + {buf_idx}), '
-                buf_idx += attr_type.value
+                buf_idx += TYPE_SIZES[attr_type]
             decode_initializer = decode_initializer[:-2] + ' }'
             decode = (f'{Generator.TAB}static {message.name} decode(const std::unique_ptr<uint8_t>& buffer, size_t len) {{\n'
                       f'{Generator.TAB*2}uint8_t* _ptr = buffer.get();\n'
@@ -339,8 +376,8 @@ class Generator:
                              f'{Generator.TAB}memcpy(buffer, &_bh_header, 5);\n')
             buf_idx = message.header_size()
             for attr_name, attr_type in message.attributes:
-                encode_memcpy += f'{Generator.TAB}memcpy(buffer + {buf_idx}, &inst->{attr_name}, {attr_type.value});\n'
-                buf_idx += attr_type.value
+                encode_memcpy += f'{Generator.TAB}memcpy(buffer + {buf_idx}, &inst->{attr_name}, {TYPE_SIZES[attr_type]});\n'
+                buf_idx += TYPE_SIZES[attr_type]
             encode = (f'uint8_t* {message.name}_encode({message.name}* inst) {{\n'
                       f'{Generator.TAB}uint8_t* buffer = (uint8_t*)malloc({message.total_size()});\n'
                       f'{encode_memcpy}'
@@ -351,7 +388,7 @@ class Generator:
             buf_idx = message.header_size()
             for attr_name, attr_type in message.attributes:
                 decode_initializer += f'*({type_map[attr_type]}*)(buffer + {buf_idx}), '
-                buf_idx += attr_type.value
+                buf_idx += TYPE_SIZES[attr_type]
             decode_initializer = decode_initializer[:-2] + ' }'
             decode = (f'{message.name} {message.name}_decode(uint8_t* buffer, size_t len) {{\n'
                       f'{Generator.TAB}{message.name} msg = {decode_initializer};\n'
